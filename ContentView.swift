@@ -368,7 +368,7 @@ extension SupabaseAuth {
             let urlString = "https://api.unsplash.com/photos/random?query=\(encodedQuery)&count=1&client_id=\(accessKey)"
             guard let url = URL(string: urlString) else { return nil }
             
-            var request = URLRequest(url: url)
+            let request = URLRequest(url: url)
             let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
                let photo = json.first,
@@ -378,7 +378,7 @@ extension SupabaseAuth {
                 if let photoId = photo["id"] as? String {
                     let downloadUrl = "https://api.unsplash.com/photos/\(photoId)/download?client_id=\(accessKey)"
                     if let downloadURL = URL(string: downloadUrl) {
-                        try? await URLSession.shared.data(from: downloadURL)
+                        _ = try? await URLSession.shared.data(from: downloadURL)
                     }
                 }
                 
@@ -437,7 +437,7 @@ extension SupabaseAuth {
                let firstPart = parts.first,
                let text = firstPart["text"] as? String {
                 
-                let jsonPattern = "\\{\\s*\\\"title\\\"\\s*:\\s*\\\"([^\\"]+)\\\"\\s*,\\s*\\\"description\\\"\\s*:\\s*\\\"([^\\"]+)\\\"\\s*,\\s*\\\"ingredients\\\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\\\"instructions\\\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\\\"prepTime\\\"\\s*:\\s*(\\d+)"
+                let jsonPattern = #"\\{\s*\"title\"\s*:\s*\"([^\"]+)\"\s*,\s*\"description\"\s*:\s*\"([^\"]+)\"\s*,\s*\"ingredients\"\s*:\s*\[([^\]]+)\]\s*,\s*\"instructions\"\s*:\s*\[([^\]]+)\]\s*,\s*\"prepTime\"\s*:\s*(\d+)"#
                 
                 if let regex = try? NSRegularExpression(pattern: jsonPattern, options: []),
                    let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) {
