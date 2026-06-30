@@ -12,7 +12,7 @@ extension Color {
     static let brandBorder = Color(red: 230/255, green: 225/255, blue: 218/255)
 }
 
-struct Recipe: Identifiable, Codable {
+struct Recipe: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
     var description: String
@@ -368,7 +368,8 @@ extension SupabaseAuth {
             let urlString = "https://api.unsplash.com/photos/random?query=\(encodedQuery)&count=1&client_id=\(accessKey)"
             guard let url = URL(string: urlString) else { return nil }
             
-            let (data, _) = try await URLSession.shared.data(for: url)
+            var request = URLRequest(url: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
                let photo = json.first,
                let imageUrl = photo["urls"] as? [String: Any],
@@ -436,7 +437,7 @@ extension SupabaseAuth {
                let firstPart = parts.first,
                let text = firstPart["text"] as? String {
                 
-                let jsonPattern = "\\{\\s*\\\"title\\\"\\s*:\\s*\\\"([^\"]+)\\\"\\s*,\\s*\\\"description\\\"\\s*:\\s*\\\"([^\"]+)\\\"\\s*,\\s*\\\"ingredients\\\"\\s*:\\s*\\[([^\]]+)\\]\\s*,\\s*\\\"instructions\\\"\\s*:\\s*\\[([^\]]+)\\]\\s*,\\s*\\\"prepTime\\\"\\s*:\\s*(\\d+)"
+                let jsonPattern = "\\{\\s*\\\"title\\\"\\s*:\\s*\\\"([^\\"]+)\\\"\\s*,\\s*\\\"description\\\"\\s*:\\s*\\\"([^\\"]+)\\\"\\s*,\\s*\\\"ingredients\\\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\\\"instructions\\\"\\s*:\\s*\\[([^\\]]+)\\]\\s*,\\s*\\\"prepTime\\\"\\s*:\\s*(\\d+)"
                 
                 if let regex = try? NSRegularExpression(pattern: jsonPattern, options: []),
                    let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) {
@@ -447,8 +448,8 @@ extension SupabaseAuth {
                     let instructionsString = (text as NSString).substring(with: match.range(at: 4))
                     let prepTime = Int((text as NSString).substring(with: match.range(at: 5))) ?? 20
                     
-                    let ingredients = ingredientsString.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "") }
-                    let instructions = instructionsString.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "") }
+                    let ingredients = ingredientsString.components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "") }
+                    let instructions = instructionsString.components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "") }
                     
                     let imageUrl = await fetchFoodImage(query: title)
                     
@@ -552,7 +553,8 @@ struct LoginScreen: View {
             VStack(spacing: 10) {
                 Button(action: { showAuthForm = true }) {
                     Text("Get Started")
-                        .font(.system(.body, weight: .medium))
+                        .font(.system(.body))
+                        .fontWeight(.medium)
                         .padding(.vertical, 16)
                         .frame(maxWidth: .infinity)
                         .foregroundColor(.brandText)
@@ -564,7 +566,8 @@ struct LoginScreen: View {
                 
                 Button(action: { showAuthForm = true }) {
                     Text("Login")
-                        .font(.system(.body, weight: .medium))
+                        .font(.system(.body))
+                        .fontWeight(.medium)
                         .padding(.vertical, 16)
                         .frame(maxWidth: .infinity)
                         .foregroundColor(.brandText)
@@ -594,7 +597,8 @@ struct LoginScreen: View {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
                         Text("Back")
-                            .font(.system(.body, weight: .medium))
+                            .font(.system(.body))
+                            .fontWeight(.medium)
                     }
                     .foregroundColor(.brandText)
                     .padding(.horizontal)
