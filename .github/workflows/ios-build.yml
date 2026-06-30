@@ -1,4 +1,4 @@
-name: Generate Free iOS Installer
+name: Build App
 
 on:
   push:
