@@ -1,0 +1,31 @@
+name: Generate Free iOS Installer
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Initialize Dummy Xcode Project Structure
+        run: |
+          # This sets up a minimal framework structure for GitHub's compiler
+          mkdir -p MyCloudApp.xcodeproj
+          echo '{"archiveVersion":1,"objectVersion":56,"objects":{},"rootObject":""}' > MyCloudApp.xcodeproj/project.pbxproj
+
+      - name: Compile and Package App Folder
+        run: |
+          mkdir -p Payload
+          # Cloud compilation targeting generic arm64 iPhone architecture
+          xcrun -sdk iphoneos swiftc ContentView.swift -o Payload/MyCloudApp
+          zip -r MyCloudApp.ipa Payload
+
+      - name: Upload Artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyUnsignedApp
+          path: MyCloudApp.ipa
