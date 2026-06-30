@@ -522,7 +522,7 @@ extension SupabaseAuth {
     }
     
     func checkPasskeyAvailability() {
-        passkeyAvailable = ASAuthorizationAppleIDProvider().isSupported
+        passkeyAvailable = true
     }
     
     func registerPasskey(email: String) async -> Bool {
@@ -568,20 +568,8 @@ extension SupabaseAuth {
         
         return await withCheckedContinuation { continuation in
             let controller = ASAuthorizationController(authorizationRequests: [request])
-            
-            controller.performRequests { result in
-                switch result {
-                case .success(let authorization):
-                    Task {
-                        let success = await self.verifyPasskeyAuthorization(authorization.credential)
-                        continuation.resume(returning: success)
-                    }
-                case .failure(let error):
-                    print("Passkey sign in failed: \(error)")
-                    self.appError = "Passkey sign in failed"
-                    continuation.resume(returning: false)
-                }
-            }
+            controller.delegate = PasskeyDelegate(continuation: continuation, auth: self)
+            controller.performRequests()
         }
     }
     
@@ -633,9 +621,35 @@ extension SupabaseAuth {
     private func generateChallenge() -> String {
         var data = Data(count: 32)
         _ = data.withUnsafeMutableBytes { bytes in
-            SecRandomCopyBytes(kSecRandomDefault, 32, bytes.baseAddress)
+            if let baseAddress = bytes.baseAddress {
+                SecRandomCopyBytes(kSecRandomDefault, 32, baseAddress)
+            }
         }
         return data.base64EncodedString()
+    }
+}
+
+class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate {
+    let continuation: CheckedContinuation<Bool, Never>
+    let auth: SupabaseAuth
+    
+    init(continuation: CheckedContinuation<Bool, Never>, auth: SupabaseAuth) {
+        self.continuation = continuation
+        self.auth = auth
+        super.init()
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        Task {
+            let success = await auth.verifyPasskeyAuthorization(authorization.credential)
+            continuation.resume(returning: success)
+        }
+    }
+    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        print("Passkey sign in failed: \(error)")
+        auth.appError = "Passkey sign in failed"
+        continuation.resume(returning: false)
     }
 }
 
