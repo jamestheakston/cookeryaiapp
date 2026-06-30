@@ -573,7 +573,7 @@ extension SupabaseAuth {
         }
     }
     
-    private func verifyPasskeyAuthorization(_ credential: ASAuthorizationCredential) async -> Bool {
+    func verifyPasskeyAuthorization(_ credential: ASAuthorizationCredential) async -> Bool {
         guard let appleIDCredential = credential as? ASAuthorizationAppleIDCredential,
               let identityToken = appleIDCredential.identityToken else {
             return false
@@ -620,9 +620,12 @@ extension SupabaseAuth {
     
     private func generateChallenge() -> String {
         var data = Data(count: 32)
-        _ = data.withUnsafeMutableBytes { bytes in
+        data.withUnsafeMutableBytes { bytes in
             if let baseAddress = bytes.baseAddress {
-                SecRandomCopyBytes(kSecRandomDefault, 32, baseAddress)
+                let status = SecRandomCopyBytes(kSecRandomDefault, 32, baseAddress)
+                if status != errSecSuccess {
+                    print("Failed to generate random bytes")
+                }
             }
         }
         return data.base64EncodedString()
@@ -934,6 +937,7 @@ struct LoginScreen: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct ContentView: View {
     @EnvironmentObject var auth: SupabaseAuth
     @State private var recipes: [Recipe] = []
@@ -1226,6 +1230,7 @@ struct ContentView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct RecipeDetailView: View {
     let recipe: Recipe
     @Environment(\.dismiss) var dismiss
@@ -1371,6 +1376,7 @@ struct RecipeDetailView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct AIGeneratorView: View {
     @Binding var recipes: [Recipe]
     @Binding var isPresented: Bool
@@ -2178,6 +2184,7 @@ struct AIGeneratorView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var auth: SupabaseAuth
@@ -2308,6 +2315,7 @@ struct SettingsView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct UpgradeModal: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var auth: SupabaseAuth
@@ -2403,6 +2411,7 @@ struct UpgradeModal: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct AcknowledgmentsView: View {
     @Environment(\.dismiss) var dismiss
     @Environment(\.openURL) var openURL
@@ -2536,6 +2545,7 @@ struct AcknowledgmentCard: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct EditRecipeSheet: View {
     @Environment(\.dismiss) var dismiss
     let recipe: Recipe
