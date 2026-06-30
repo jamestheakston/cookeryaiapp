@@ -22,6 +22,8 @@
     <true/>
     <key>MinimumOSVersion</key>
     <string>15.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.food-and-drink</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>CFBundleIcons</key>
@@ -36,5 +38,37 @@
             <false/>
         </dict>
     </dict>
+    <key>NSAcknowledgments</key>
+    <string>
+Cookery AI uses the following open-source software and services:
+
+SwiftUI
+License: Apple Software License
+https://developer.apple.com/documentation/swiftui
+
+StoreKit
+License: Apple Software License
+https://developer.apple.com/documentation/storekit
+
+UserNotifications
+License: Apple Software License
+https://developer.apple.com/documentation/usernotifications
+
+AuthenticationServices
+License: Apple Software License
+https://developer.apple.com/documentation/authenticationservices
+
+Unsplash API
+License: Unsplash API License
+https://unsplash.com/developers
+
+Google AI Studio
+License: Google Terms of Service
+https://ai.google.dev/
+
+Supabase
+License: MIT License
+https://supabase.com
+    </string>
 </dict>
 </plist>

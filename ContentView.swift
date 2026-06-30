@@ -1,6 +1,8 @@
 import SwiftUI
 import StoreKit
 import Combine
+import UserNotifications
+import AuthenticationServices
 
 extension Color {
     static let brandBg = Color(red: 250/255, green: 248/255, blue: 245/255)
@@ -55,6 +57,9 @@ class SupabaseAuth: ObservableObject, @unchecked Sendable {
     @Published var unsplashAccessKey: String? = nil
     @Published var unsplashSecretKey: String? = nil
     @Published var googleApiKey: String? = nil
+    @Published var appError: String? = nil
+    @Published var notificationsEnabled: Bool = false
+    @Published var passkeyAvailable: Bool = false
     
     private let projectUrl = "https://ojvigxnwweixjhugekmm.supabase.co"
     private let apiKey = "sb_publishable_ok_vkZ1FDJ_hv-qdv76tJw_RJ78nd6W"
@@ -66,6 +71,7 @@ class SupabaseAuth: ObservableObject, @unchecked Sendable {
     private let chefKey = "cookery_chef_status"
     private let recipeCountKey = "cookery_daily_count"
     private let lastDateKey = "cookery_last_date"
+    private let notificationsKey = "cookery_notifications_enabled"
     
     enum PurchaseState {
         case idle
@@ -78,6 +84,8 @@ class SupabaseAuth: ObservableObject, @unchecked Sendable {
         loadPersistedState()
         updateListenerTask = listenForTransactions()
         fetchSecrets()
+        checkNotificationPermission()
+        checkPasskeyAvailability()
     }
     
     deinit {
@@ -289,6 +297,7 @@ extension SupabaseAuth {
         self.isAuthenticated = UserDefaults.standard.bool(forKey: authKey)
         self.isChef = UserDefaults.standard.bool(forKey: chefKey)
         self.dailyRecipeCount = UserDefaults.standard.integer(forKey: recipeCountKey)
+        self.notificationsEnabled = UserDefaults.standard.bool(forKey: notificationsKey)
         if let lastDate = UserDefaults.standard.object(forKey: lastDateKey) as? Date {
             self.lastRecipeDate = lastDate
         }
@@ -306,6 +315,46 @@ extension SupabaseAuth {
         UserDefaults.standard.set(dailyRecipeCount, forKey: recipeCountKey)
         if let lastDate = lastRecipeDate {
             UserDefaults.standard.set(lastDate, forKey: lastDateKey)
+        }
+    }
+    
+    private func saveNotificationState() {
+        UserDefaults.standard.set(notificationsEnabled, forKey: notificationsKey)
+    }
+    
+    func checkNotificationPermission() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                self.notificationsEnabled = settings.authorizationStatus == .authorized
+            }
+        }
+    }
+    
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            DispatchQueue.main.async {
+                self.notificationsEnabled = granted
+                self.saveNotificationState()
+                if let error = error {
+                    self.appError = "Failed to enable notifications: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    func sendRecipeNotification(recipeTitle: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Recipe Ready!"
+        content.body = "Your \(recipeTitle) recipe is ready to view."
+        content.sound = .default
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.appError = "Failed to send notification: \(error.localizedDescription)"
+                }
+            }
         }
     }
     
@@ -471,6 +520,123 @@ extension SupabaseAuth {
         
         return nil
     }
+    
+    func checkPasskeyAvailability() {
+        passkeyAvailable = ASAuthorizationAppleIDProvider().isSupported
+    }
+    
+    func registerPasskey(email: String) async -> Bool {
+        guard let url = URL(string: "\(projectUrl)/auth/v1/mfa") else { return false }
+        
+        let challenge = generateChallenge()
+        let userID = UUID().uuidString
+        
+        let registrationRequest: [String: Any] = [
+            "email": email,
+            "challenge": challenge,
+            "user_id": userID,
+            "origin": "https://\(projectUrl)"
+        ]
+        
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: registrationRequest)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = jsonData
+            
+            let (_, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return false
+            }
+            
+            return true
+        } catch {
+            print("Passkey registration failed: \(error)")
+            appError = "Passkey registration failed"
+            return false
+        }
+    }
+    
+    func signInWithPasskey() async -> Bool {
+        let provider = ASAuthorizationAppleIDProvider()
+        let request = provider.createRequest()
+        request.requestedScopes = [.email, .fullName]
+        
+        return await withCheckedContinuation { continuation in
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            
+            controller.performRequests { result in
+                switch result {
+                case .success(let authorization):
+                    Task {
+                        let success = await self.verifyPasskeyAuthorization(authorization.credential)
+                        continuation.resume(returning: success)
+                    }
+                case .failure(let error):
+                    print("Passkey sign in failed: \(error)")
+                    self.appError = "Passkey sign in failed"
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+    
+    private func verifyPasskeyAuthorization(_ credential: ASAuthorizationCredential) async -> Bool {
+        guard let appleIDCredential = credential as? ASAuthorizationAppleIDCredential,
+              let identityToken = appleIDCredential.identityToken else {
+            return false
+        }
+        
+        let tokenString = String(data: identityToken, encoding: .utf8) ?? ""
+        
+        guard let url = URL(string: "\(projectUrl)/auth/v1/verify") else { return false }
+        
+        let verificationRequest: [String: Any] = [
+            "id_token": tokenString,
+            "provider": "apple"
+        ]
+        
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: verificationRequest)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = jsonData
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return false
+            }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let accessToken = json["access_token"] as? String {
+                UserDefaults.standard.set(accessToken, forKey: authKey)
+                isAuthenticated = true
+                return true
+            }
+            
+            return false
+        } catch {
+            print("Passkey verification failed: \(error)")
+            appError = "Passkey verification failed"
+            return false
+        }
+    }
+    
+    private func generateChallenge() -> String {
+        var data = Data(count: 32)
+        _ = data.withUnsafeMutableBytes { bytes in
+            SecRandomCopyBytes(kSecRandomDefault, 32, bytes.baseAddress)
+        }
+        return data.base64EncodedString()
+    }
 }
 
 @main
@@ -509,84 +675,102 @@ struct LoginScreen: View {
     }
     
     private var welcomeScreen: some View {
-        VStack {
-            VStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color.brandCard)
-                    .frame(width: 356, height: 480)
-                    .overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 11) {
-                            RoundedRectangle(cornerRadius: 17, style: .continuous)
-                                .fill(Color.brandGold)
-                                .frame(width: 72, height: 72)
-                                .shadow(color: Color.brandText.opacity(0.12), radius: 8, x: 0, y: 4)
-                                .overlay {
-                                    Image(systemName: "fork.knife")
-                                        .font(.system(size: 32, weight: .medium))
-                                        .foregroundColor(.white)
-                                }
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("Cookery")
-                                    .font(.system(.largeTitle, design: .serif))
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.brandText)
-                                Text("Welcome to the future of recipes.")
-                                    .font(.system(.headline, design: .serif))
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.brandSecondary)
-                                    .frame(width: 190, alignment: .leading)
+        ScrollView {
+            VStack(spacing: 0) {
+                ZStack {
+                    Image("cooking")
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 500)
+                        .clipped()
+                    
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.3),
+                            Color.black.opacity(0.1),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 500)
+                    
+                    VStack(alignment: .leading, spacing: 16) {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.brandGold, Color.orange],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 80, height: 80)
+                            .shadow(color: Color.brandGold.opacity(0.4), radius: 20, x: 0, y: 10)
+                            .overlay {
+                                Image(systemName: "fork.knife")
+                                    .font(.system(size: 36, weight: .semibold))
+                                    .foregroundColor(.white)
                             }
-                        }
-                        .padding()
-                        .padding(.top, 42)
-                    }
-                    .overlay(alignment: .bottom) {
-                        Group {
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Cookery")
+                                .font(.system(size: 42, weight: .bold, design: .serif))
+                                .foregroundColor(.white)
+                                .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
                             
+                            Text("Welcome to the future of recipes.")
+                                .font(.system(size: 18, weight: .medium, design: .serif))
+                                .foregroundColor(.white.opacity(0.95))
+                                .lineSpacing(4)
+                                .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 1)
                         }
                     }
-                    .padding()
-                    .padding(.top, 40)
-                    .shadow(color: Color.brandText.opacity(0.15), radius: 18, x: 0, y: 14)
-            }
-            
-            VStack(spacing: 10) {
-                Button(action: { showAuthForm = true }) {
-                    Text("Get Started")
-                        .font(.system(.body))
-                        .fontWeight(.medium)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.brandText)
-                        .background {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.brandGoldLight)
-                        }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(32)
+                    .padding(.top, 60)
                 }
                 
-                Button(action: { showAuthForm = true }) {
-                    Text("Login")
-                        .font(.system(.body))
-                        .fontWeight(.medium)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: .infinity)
-                        .foregroundColor(.brandText)
-                        .background {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.brandGoldLight)
+                VStack(spacing: 20) {
+                    VStack(spacing: 12) {
+                        Button(action: { showAuthForm = true }) {
+                            HStack {
+                                Text("Get Started")
+                                    .font(.system(size: 17, weight: .semibold))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .buttonStyle(.borderedProminent)
                         }
-                }
-                
-                Button(action: { auth.continueWithoutAccount() }) {
-                    Text("Try without an account")
-                        .padding(.top)
+                        
+                        Button(action: { showAuthForm = true }) {
+                            Text("Login")
+                                .font(.system(size: 17, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    
+                    Button(action: { auth.continueWithoutAccount() }) {
+                        HStack(spacing: 6) {
+                            Text("Continue without an account")
+                                .font(.system(size: 15, weight: .medium))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
                         .foregroundColor(.brandSecondary)
-                        .font(.subheadline)
+                    }
+                    .padding(.top, 8)
                 }
+                .padding(.top, 40)
+                .padding(.bottom, 40)
             }
-            .padding(.horizontal)
-            Spacer()
         }
+        .background(Color.brandBg.ignoresSafeArea())
     }
     
     private var authForm: some View {
@@ -696,10 +880,30 @@ struct LoginScreen: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 52)
-                        .background(email.isEmpty || password.isEmpty ? Color.brandSecondary.opacity(0.5) : Color.brandText)
-                        .cornerRadius(16)
+                        .buttonStyle(.borderedProminent)
                     }
                     .disabled(email.isEmpty || password.isEmpty || auth.isLoading)
+                    
+                    if auth.passkeyAvailable {
+                        Button(action: {
+                            Task {
+                                if await auth.signInWithPasskey() {
+                                    showAuthForm = false
+                                }
+                            }
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "faceid")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Sign in with Passkey")
+                                    .font(.system(size: 15, weight: .medium))
+                            }
+                            .foregroundColor(.brandText)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .buttonStyle(.bordered)
+                        }
+                    }
                     
                     Button(action: { isSignUpMode.toggle() }) {
                         Text(isSignUpMode ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
@@ -725,11 +929,12 @@ struct ContentView: View {
     @State private var editingRecipe: Recipe? = nil
     @State private var showingDeleteAlert = false
     @State private var recipeToDelete: Recipe? = nil
+    @State private var showingSettings = false
     
     private let recipesKey = "cookery_recipes"
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.brandBg.ignoresSafeArea()
                 
@@ -766,6 +971,11 @@ struct ContentView: View {
                                         .fontWeight(.semibold)
                                         .foregroundColor(.brandSecondary)
                                 }
+                                Button(action: { showingSettings = true }) {
+                                    Image(systemName: "gearshape")
+                                        .foregroundColor(.brandSecondary)
+                                        .font(.system(size: 18))
+                                }
                                 Button(action: { auth.signOut() }) {
                                     Image(systemName: "rectangle.portrait.and.arrow.right")
                                         .foregroundColor(.brandSecondary)
@@ -787,9 +997,7 @@ struct ContentView: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .frame(height: 52)
-                            .background(Color.brandText)
-                            .cornerRadius(16)
-                            .shadow(color: Color.brandText.opacity(0.1), radius: 8, x: 0, y: 4)
+                            .buttonStyle(.borderedProminent)
                         }
                         .padding(.horizontal)
                         
@@ -936,6 +1144,18 @@ struct ContentView: View {
                     }
                 })
             }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+            }
+            .alert("Error", isPresented: .constant(auth.appError != nil)) {
+                Button("OK") {
+                    auth.appError = nil
+                }
+            } message: {
+                if let error = auth.appError {
+                    Text(error)
+                }
+            }
         }
         .onAppear {
             auth.loadProduct()
@@ -997,7 +1217,7 @@ struct RecipeDetailView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.brandBg.ignoresSafeArea()
                 
@@ -1144,6 +1364,8 @@ struct AIGeneratorView: View {
     
     @State private var selectedMode: CreationMode = .ai
     @State private var isGenerating = false
+    @State private var showNotificationPrompt = false
+    @State private var notificationPermissionGranted = false
     
     @State private var cravingInput = ""
     @State private var selectedDietaryRequirements: Set<String> = []
@@ -1185,7 +1407,7 @@ struct AIGeneratorView: View {
     private let mealTypes = ["Breakfast", "Lunch", "Dinner", "Snack", "Dessert", "Appetizer"]
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.brandBg.ignoresSafeArea()
                 
@@ -1462,6 +1684,11 @@ struct AIGeneratorView: View {
                     return
                 }
                 
+                if !auth.notificationsEnabled {
+                    showNotificationPrompt = true
+                    return
+                }
+                
                 isGenerating = true
                 
                 Task {
@@ -1474,6 +1701,7 @@ struct AIGeneratorView: View {
                         await MainActor.run {
                             recipes.append(generatedRecipe)
                             auth.incrementRecipeCount()
+                            auth.sendRecipeNotification(recipeTitle: generatedRecipe.title)
                             isPresented = false
                             isGenerating = false
                         }
@@ -1493,16 +1721,68 @@ struct AIGeneratorView: View {
                     Text(isGenerating ? "Generating..." : "Generate Recipe")
                         .font(.headline)
                 }
-                .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(cravingInput.isEmpty ? Color.brandSecondary.opacity(0.4) : Color.brandText)
-                .cornerRadius(16)
+                .buttonStyle(.borderedProminent)
             }
             .disabled(cravingInput.isEmpty || isGenerating)
-            .disabled(cravingInput.isEmpty)
             .padding(.horizontal)
             .padding(.top, 10)
+        }
+        .alert("Get Notified", isPresented: $showNotificationPrompt) {
+            Button("Not Now") {
+                isGenerating = true
+                Task {
+                    let dietaryArray = Array(selectedDietaryRequirements)
+                    if let generatedRecipe = await auth.generateRecipe(
+                        prompt: cravingInput.isEmpty ? "a delicious recipe" : cravingInput,
+                        dietary: dietaryArray,
+                        style: selectedStyle.isEmpty ? "home cooking" : selectedStyle
+                    ) {
+                        await MainActor.run {
+                            recipes.append(generatedRecipe)
+                            auth.incrementRecipeCount()
+                            isPresented = false
+                            isGenerating = false
+                        }
+                    } else {
+                        await MainActor.run {
+                            isGenerating = false
+                        }
+                    }
+                }
+            }
+            Button("Enable Notifications") {
+                auth.requestNotificationPermission()
+                showNotificationPrompt = false
+                isGenerating = true
+                Task {
+                    let dietaryArray = Array(selectedDietaryRequirements)
+                    if let generatedRecipe = await auth.generateRecipe(
+                        prompt: cravingInput.isEmpty ? "a delicious recipe" : cravingInput,
+                        dietary: dietaryArray,
+                        style: selectedStyle.isEmpty ? "home cooking" : selectedStyle
+                    ) {
+                        await MainActor.run {
+                            recipes.append(generatedRecipe)
+                            auth.incrementRecipeCount()
+                            auth.sendRecipeNotification(recipeTitle: generatedRecipe.title)
+                            isPresented = false
+                            isGenerating = false
+                        }
+                    } else {
+                        await MainActor.run {
+                            isGenerating = false
+                        }
+                    }
+                }
+            }
+        } message: {
+            if notificationPermissionGranted {
+                Text("We'll notify you when your recipe is ready. Feel free to leave the app while we work our magic!")
+            } else {
+                Text("Want to leave the app but still know when your recipe is ready? Enable notifications to get alerted when it's done.")
+            }
         }
     }
     
@@ -1551,6 +1831,11 @@ struct AIGeneratorView: View {
                     return
                 }
                 
+                if !auth.notificationsEnabled {
+                    showNotificationPrompt = true
+                    return
+                }
+                
                 let filteredIngredients = ingredientFields.filter { !$0.isEmpty }
                 
                 Task {
@@ -1569,19 +1854,71 @@ struct AIGeneratorView: View {
                         )
                         recipes.append(newRecipe)
                         auth.incrementRecipeCount()
+                        auth.sendRecipeNotification(recipeTitle: newRecipe.title)
                         isPresented = false
                     }
                 }
             }) {
                 Text("Generate Recipe from Ingredients")
                     .font(.headline)
-                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
-                    .background(Color.brandText)
-                    .cornerRadius(16)
+                    .buttonStyle(.borderedProminent)
             }
             .padding(.horizontal)
+        }
+        .alert("Get Notified", isPresented: $showNotificationPrompt) {
+            Button("Not Now") {
+                let filteredIngredients = ingredientFields.filter { !$0.isEmpty }
+                Task {
+                    let imageUrl = await auth.fetchFoodImage(query: filteredIngredients.first ?? "food")
+                    await MainActor.run {
+                        let newRecipe = Recipe(
+                            title: "Ingredient-Based Creation",
+                            description: "A recipe crafted from your available ingredients: \(filteredIngredients.joined(separator: ", ")).",
+                            ingredients: filteredIngredients.isEmpty ? ["Available ingredients"] : filteredIngredients,
+                            instructions: ["Prepare your ingredients.", "Follow cooking instructions tailored to your available items."],
+                            prepTime: 20,
+                            imageUrl: imageUrl,
+                            photographerName: "Unsplash",
+                            photographerUrl: "https://unsplash.com"
+                        )
+                        recipes.append(newRecipe)
+                        auth.incrementRecipeCount()
+                        isPresented = false
+                    }
+                }
+            }
+            Button("Enable Notifications") {
+                auth.requestNotificationPermission()
+                showNotificationPrompt = false
+                let filteredIngredients = ingredientFields.filter { !$0.isEmpty }
+                Task {
+                    let imageUrl = await auth.fetchFoodImage(query: filteredIngredients.first ?? "food")
+                    await MainActor.run {
+                        let newRecipe = Recipe(
+                            title: "Ingredient-Based Creation",
+                            description: "A recipe crafted from your available ingredients: \(filteredIngredients.joined(separator: ", ")).",
+                            ingredients: filteredIngredients.isEmpty ? ["Available ingredients"] : filteredIngredients,
+                            instructions: ["Prepare your ingredients.", "Follow cooking instructions tailored to your available items."],
+                            prepTime: 20,
+                            imageUrl: imageUrl,
+                            photographerName: "Unsplash",
+                            photographerUrl: "https://unsplash.com"
+                        )
+                        recipes.append(newRecipe)
+                        auth.incrementRecipeCount()
+                        auth.sendRecipeNotification(recipeTitle: newRecipe.title)
+                        isPresented = false
+                    }
+                }
+            }
+        } message: {
+            if notificationPermissionGranted {
+                Text("We'll notify you when your recipe is ready. Feel free to leave the app while we work our magic!")
+            } else {
+                Text("Want to leave the app but still know when your recipe is ready? Enable notifications to get alerted when it's done.")
+            }
         }
     }
     
@@ -1734,6 +2071,11 @@ struct AIGeneratorView: View {
                     return
                 }
                 
+                if !auth.notificationsEnabled {
+                    showNotificationPrompt = true
+                    return
+                }
+                
                 let calculatedTime = Int(manualPrepTime) ?? 10
                 
                 Task {
@@ -1752,21 +2094,431 @@ struct AIGeneratorView: View {
                         )
                         recipes.append(newRecipe)
                         auth.incrementRecipeCount()
+                        auth.sendRecipeNotification(recipeTitle: newRecipe.title)
                         isPresented = false
                     }
                 }
             }) {
                 Text("Save Recipe")
                     .font(.headline)
-                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
-                    .background(manualTitle.isEmpty ? Color.brandSecondary.opacity(0.4) : Color.brandText)
-                    .cornerRadius(16)
+                    .buttonStyle(.borderedProminent)
             }
             .disabled(manualTitle.isEmpty)
             .padding(.horizontal)
         }
+        .alert("Get Notified", isPresented: $showNotificationPrompt) {
+            Button("Not Now") {
+                let calculatedTime = Int(manualPrepTime) ?? 10
+                Task {
+                    let imageUrl = await auth.fetchFoodImage(query: manualTitle.isEmpty ? "food" : manualTitle)
+                    await MainActor.run {
+                        let newRecipe = Recipe(
+                            title: manualTitle.isEmpty ? "Custom Created Recipe" : manualTitle,
+                            description: manualDescription.isEmpty ? "Manually documented cookbook creation." : manualDescription,
+                            ingredients: manualIngredients.filter { !$0.isEmpty },
+                            instructions: manualInstructions.filter { !$0.isEmpty },
+                            prepTime: calculatedTime,
+                            imageUrl: imageUrl,
+                            photographerName: "Unsplash",
+                            photographerUrl: "https://unsplash.com"
+                        )
+                        recipes.append(newRecipe)
+                        auth.incrementRecipeCount()
+                        isPresented = false
+                    }
+                }
+            }
+            Button("Enable Notifications") {
+                auth.requestNotificationPermission()
+                showNotificationPrompt = false
+                let calculatedTime = Int(manualPrepTime) ?? 10
+                Task {
+                    let imageUrl = await auth.fetchFoodImage(query: manualTitle.isEmpty ? "food" : manualTitle)
+                    await MainActor.run {
+                        let newRecipe = Recipe(
+                            title: manualTitle.isEmpty ? "Custom Created Recipe" : manualTitle,
+                            description: manualDescription.isEmpty ? "Manually documented cookbook creation." : manualDescription,
+                            ingredients: manualIngredients.filter { !$0.isEmpty },
+                            instructions: manualInstructions.filter { !$0.isEmpty },
+                            prepTime: calculatedTime,
+                            imageUrl: imageUrl,
+                            photographerName: "Unsplash",
+                            photographerUrl: "https://unsplash.com"
+                        )
+                        recipes.append(newRecipe)
+                        auth.incrementRecipeCount()
+                        auth.sendRecipeNotification(recipeTitle: newRecipe.title)
+                        isPresented = false
+                    }
+                }
+            }
+        } message: {
+            if notificationPermissionGranted {
+                Text("We'll notify you when your recipe is ready. Feel free to leave the app while we work our magic!")
+            } else {
+                Text("Want to leave the app but still know when your recipe is ready? Enable notifications to get alerted when it's done.")
+            }
+        }
+    }
+}
+
+struct SettingsView: View {
+    @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var auth: SupabaseAuth
+    @State private var showingAcknowledgments = false
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.brandBg.ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    List {
+                        Section {
+                            HStack {
+                                Image(systemName: "bell.fill")
+                                    .foregroundColor(.brandGold)
+                                    .frame(width: 30)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Notifications")
+                                        .font(.body)
+                                        .foregroundColor(.brandText)
+                                    Text("Get notified when recipes are ready")
+                                        .font(.caption)
+                                        .foregroundColor(.brandSecondary)
+                                }
+                                Spacer()
+                                Toggle("", isOn: $auth.notificationsEnabled)
+                                    .onChange(of: auth.notificationsEnabled) { newValue in
+                                        if newValue {
+                                            auth.requestNotificationPermission()
+                                        }
+                                    }
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .listRowBackground(Color.brandCard)
+                        .listRowSeparator(.hidden)
+                        
+                        Section {
+                            HStack {
+                                Image(systemName: "star.fill")
+                                    .foregroundColor(.brandGold)
+                                    .frame(width: 30)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Upgrade to Chef")
+                                        .font(.body)
+                                        .foregroundColor(.brandText)
+                                    Text("Unlimited recipe creation")
+                                        .font(.caption)
+                                        .foregroundColor(.brandSecondary)
+                                }
+                                Spacer()
+                                if auth.isChef {
+                                    Text("Active")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.brandGold)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.brandGoldLight)
+                                        .cornerRadius(12)
+                                } else {
+                                    Image(systemName: "chevron.right")
+                                        .foregroundColor(.brandSecondary)
+                                        .font(.system(size: 14))
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if !auth.isChef {
+                                    auth.showUpgradeModal = true
+                                }
+                            }
+                        }
+                        .listRowBackground(Color.brandCard)
+                        .listRowSeparator(.hidden)
+                        
+                        Section {
+                            HStack {
+                                Image(systemName: "info.circle.fill")
+                                    .foregroundColor(.brandGold)
+                                    .frame(width: 30)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Acknowledgments")
+                                        .font(.body)
+                                        .foregroundColor(.brandText)
+                                    Text("Licenses and attributions")
+                                        .font(.caption)
+                                        .foregroundColor(.brandSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.brandSecondary)
+                                    .font(.system(size: 14))
+                            }
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                showingAcknowledgments = true
+                            }
+                        }
+                        .listRowBackground(Color.brandCard)
+                        .listRowSeparator(.hidden)
+                    }
+                    .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.body)
+                    .foregroundColor(.brandText)
+                }
+            }
+            .sheet(isPresented: $auth.showUpgradeModal) {
+                UpgradeModal()
+            }
+            .sheet(isPresented: $showingAcknowledgments) {
+                AcknowledgmentsView()
+            }
+        }
+    }
+}
+
+struct UpgradeModal: View {
+    @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var auth: SupabaseAuth
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+                .onTapGesture {
+                    dismiss()
+                }
+            
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Image(systemName: "crown.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(.brandGold)
+                    
+                    Text("Upgrade to Chef")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.brandText)
+                    
+                    Text("Unlock unlimited recipe creation and support the development of Cookery.")
+                        .font(.body)
+                        .foregroundColor(.brandSecondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                }
+                .padding(24)
+                
+                VStack(spacing: 12) {
+                    if auth.isProcessingPayment {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .brandGold))
+                        Text("Processing your payment...")
+                            .font(.caption)
+                            .foregroundColor(.brandSecondary)
+                    } else if let product = auth.product {
+                        Text("Unlock unlimited recipe creation for \(product.displayPrice).")
+                            .font(.body)
+                            .foregroundColor(.brandText)
+                    } else {
+                        Text("Loading pricing...")
+                            .font(.body)
+                            .foregroundColor(.brandSecondary)
+                    }
+                }
+                .padding(.horizontal, 24)
+                
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        auth.showUpgradeModal = false
+                        auth.purchaseState = .idle
+                    }
+                    .font(.body)
+                    .foregroundColor(.brandSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color.brandCard)
+                    .cornerRadius(12)
+                    
+                    if auth.product != nil {
+                        Button("Upgrade Now") {
+                            auth.upgradeToChef()
+                        }
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.brandText)
+                        .cornerRadius(12)
+                    } else {
+                        Button("Retry") {
+                            auth.loadProduct()
+                        }
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.brandText)
+                        .cornerRadius(12)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+            }
+            .background(Color.brandCard)
+            .cornerRadius(24)
+            .padding(.horizontal, 32)
+        }
+    }
+}
+
+struct AcknowledgmentsView: View {
+    @Environment(\.dismiss) var dismiss
+    @Environment(\.openURL) var openURL
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.brandBg.ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Acknowledgments")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.brandText)
+                            
+                            Text("Cookery uses the following open-source libraries and services:")
+                                .font(.body)
+                                .foregroundColor(.brandSecondary)
+                        }
+                        .padding(.horizontal)
+                        
+                        VStack(spacing: 16) {
+                            AcknowledgmentCard(
+                                name: "SwiftUI",
+                                description: "Apple's declarative UI framework",
+                                license: "Apple License",
+                                url: "https://developer.apple.com/documentation/swiftui"
+                            )
+                            
+                            AcknowledgmentCard(
+                                name: "StoreKit",
+                                description: "Apple's in-app purchase framework",
+                                license: "Apple License",
+                                url: "https://developer.apple.com/documentation/storekit"
+                            )
+                            
+                            AcknowledgmentCard(
+                                name: "UserNotifications",
+                                description: "Apple's notification framework",
+                                license: "Apple License",
+                                url: "https://developer.apple.com/documentation/usernotifications"
+                            )
+                            
+                            AcknowledgmentCard(
+                                name: "Unsplash API",
+                                description: "Free high-quality photos",
+                                license: "Unsplash License",
+                                url: "https://unsplash.com/license"
+                            )
+                            
+                            AcknowledgmentCard(
+                                name: "Google AI Studio",
+                                description: "AI-powered recipe generation",
+                                license: "Google Terms of Service",
+                                url: "https://ai.google.dev/terms"
+                            )
+                            
+                            AcknowledgmentCard(
+                                name: "Supabase",
+                                description: "Backend-as-a-Service platform",
+                                license: "MIT License",
+                                url: "https://github.com/supabase/supabase"
+                            )
+                        }
+                        .padding(.horizontal)
+                    }
+                    .padding(.vertical)
+                }
+            }
+            .navigationTitle("Licenses")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .font(.body)
+                    .foregroundColor(.brandText)
+                }
+            }
+        }
+    }
+}
+
+struct AcknowledgmentCard: View {
+    let name: String
+    let description: String
+    let license: String
+    let url: String
+    @Environment(\.openURL) var openURL
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(name)
+                        .font(.headline)
+                        .foregroundColor(.brandText)
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.brandSecondary)
+                }
+                Spacer()
+                Button(action: {
+                    if let url = URL(string: url) {
+                        openURL(url)
+                    }
+                }) {
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundColor(.brandGold)
+                        .font(.system(size: 20))
+                }
+            }
+            
+            HStack {
+                Text(license)
+                    .font(.caption2)
+                    .foregroundColor(.brandSecondary)
+                Spacer()
+            }
+        }
+        .padding(16)
+        .background(Color.brandCard)
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.brandBorder, lineWidth: 1)
+        )
     }
 }
 
@@ -1792,7 +2544,7 @@ struct EditRecipeSheet: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 Color.brandBg.ignoresSafeArea()
                 
@@ -1926,4 +2678,4 @@ struct EditRecipeSheet: View {
             }
         }
     }
-} 
+}
