@@ -1,23 +1,31 @@
-EULA
+# LICENSE & END USER AGREEMENT
 
-Copyright (c) 2026 James Theakston & PIXEL CANVAS LABS APP DEVELOPMENT STUDIO
+**Copyright (c) 2026 James Theakston & PIXEL CANVAS LABS APP DEVELOPMENT STUDIO**
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+---
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+### 1. PERMITTED USES & COPIES
+Permission is hereby granted to any person obtaining a copy of this software and associated documentation files from this repository to view, download, fork, and copy the code for personal or educational use, subject to the following conditions:
 
-Acknowledgment is given to James Theakston & PIXEL CANVAS LABS APP DEVELOPMENT STUDIO
+* **Mandatory Attribution:** The original copyright notice, author credits, and this permission notice must be included intact in all copies, forks, or substantial portions of the software. 
+* **Credit Requirement:** Clear, visible acknowledgment must be given to **James Theakston & PIXEL CANVAS LABS APP DEVELOPMENT STUDIO** in the documentation or repository description of any derivative works.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+### 2. RESTRICTIONS
+You may not repackage, sublicense, or sell this software, its code, or its AI recipe assets for commercial profit without explicit, written permission from the original authors.
+
+### 3. BETA SOFTWARE NOTICE
+This software is in a beta testing phase. It is provided strictly on an **"as-is"** and **"as-available"** basis. It is expected to contain software bugs, glitches, and operational defects. The primary purpose of public hosting is to obtain development feedback, track performance, and identify errors. Do not rely on the correct functioning or performance of this software.
+
+### 4. AI-GENERATED CONTENT & FOOD SAFETY WARNING
+All recipes, ingredient lists, measurements, substitution suggestions, cooking times, and temperatures generated or displayed by this software are handled by Artificial Intelligence (AI). AI models can make errors, hallucinate incorrect data, or provide inaccurate and potentially hazardous instructions.
+
+* **Verify Before Cooking:** You must use your own judgment and culinary common sense. Always verify that cooking temperatures, preparation methods, and raw ingredient handling align with standard public food safety guidelines.
+* **Allergies & Dietary Restrictions:** The AI may fail to recognize cross-contamination risks or incorrect ingredients for specific dietary restrictions. Always inspect ingredients against your personal health and allergy profile before consuming.
+* **Assumption of Risk:** By using or testing this app, you acknowledge that cooking involves inherent risks (including burns, cuts, and foodborne illness) and agree to assume full responsibility for those risks.
+
+### 5. DISCLAIMER OF WARRANTY & LIABILITY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. 
+
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS (JAMES THEAKSTON & PIXEL CANVAS LABS) BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. 
+
+THIS INCLUDES, WITHOUT LIMITATION, ANY DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES FOR: RUINED MEALS, DAMAGED KITCHEN APPLIANCES, FOOD POISONING, ALLERGIC REACTIONS, OR PHYSICAL INJURIES RESULTING FROM RELIANCE ON AI-GENERATED CONTENT OR SOFTWARE MALFUNCTIONS.
